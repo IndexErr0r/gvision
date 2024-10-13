@@ -122,7 +122,6 @@
                     You do not need to always work with images. Only use your image modification tools if the user explicitly provides an image.
                     Do not discuss the technical details of how you process images, including JSON formatting, bounding boxes, or your use of the tools.
                     Always communicate in a formal and humanized tone, using markdown formatting when appropriate.
-                    Mention that your image manipulation abilities include circling, pointing, and cutting objects, but do not elaborate on how these actions are performed.
                     Your primary goal is to provide helpful, formal, and accurate responses on any subject while maintaining the ability to handle image-related tasks if requested.
                     You ALWAYS answer in portuguese, of Brazil!
                     `,
@@ -322,11 +321,97 @@
                 processMessageAndImage();
             }
         }
-
+        
+        
         // Attach event listeners
         document.getElementById('sendButton').addEventListener('click', processMessageAndImage);
         document.getElementById('messageInput').addEventListener('paste', handlePaste);
         document.getElementById('messageInput').addEventListener('keypress', handleKeyPress);
+        let cameraPermissionGranted = false;
+        let stream = null;
+
+        document.getElementById('cameraButton').addEventListener('click', async () => {
+        // Verifique se a permissão da câmera já foi concedida
+        if (!cameraPermissionGranted) {
+            try {
+                // Solicite permissão para usar a câmera
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                cameraPermissionGranted = true;
+            } catch (error) {
+                console.error('Erro ao solicitar permissão da câmera:', error);
+                return;
+            }
+        }
+
+        // Crie um popup para exibir a visualização da câmera
+        const popup = document.createElement('div');
+        popup.style.position = 'fixed';
+        popup.style.top = '50%';
+        popup.style.left = '50%';
+        popup.style.transform = 'translate(-50%, -50%)';
+        popup.style.background = 'white';
+        popup.style.padding = '20px';
+        popup.style.borderRadius = '10px';
+        popup.style.boxShadow = '0 0 10px rgba(0, 0, 0, 0.2)';
+        document.body.appendChild(popup);
+
+        // Crie um elemento de vídeo para exibir a visualização da câmera
+        const video = document.createElement('video');
+        video.style.width = '100%';
+        video.style.height = '100%';
+        video.autoplay = true;
+        video.srcObject = stream; // Adicione essa linha para exibir o vídeo da câmera
+        popup.appendChild(video);
+
+        // Crie um botão para capturar a imagem
+        const captureButton = document.createElement('button');
+        captureButton.textContent = 'Capturar';
+        popup.appendChild(captureButton);
+
+        // Adicione um evento de clique ao botão de captura
+        captureButton.addEventListener('click', async () => {
+            // Crie um canvas para capturar a imagem
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+
+            // Desenhe o frame do vídeo no canvas
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // Converte a imagem para um arquivo
+            canvas.toBlob(blob => {
+                if (blob) {
+                    // Aqui, estamos atualizando a variável global `pastedImage`
+                    pastedImage = new File([blob], 'photo.jpg', { type: 'image/jpeg' });
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        document.getElementById('imagePreview').src = event.target.result;
+                        document.getElementById('imagePreview').style.display = 'block';
+                    };
+                    reader.readAsDataURL(pastedImage);
+                }
+            });
+
+            // Pare a transmissão da câmera
+            stream.getTracks().forEach(track => track.stop());
+
+            // Remova o popup
+            document.body.removeChild(popup);
+
+            // Reinicie o stream e as variáveis
+            stream = null;
+            cameraPermissionGranted = false;
+        });
+
+        // Adicione um evento de erro ao elemento de vídeo
+        video.onerror = () => {
+            console.error('Erro ao exibir a visualização da câmera');
+            stream.getTracks().forEach(track => track.stop());
+            document.body.removeChild(popup);
+        };
+    });
+
     </script>
     <style>
         .user-message {
@@ -421,18 +506,20 @@
         <h1>GVision - MrRafiopy</h1>
         <p>Ask it to circle, cut, point an arrow or a dot at an object!</p>
         <select id="modelSelect">
+            <option value="gemini-1.5-pro-exp-0827">gemini-1.5-pro-exp-0827</option>
             <option value="gemini-1.5-pro-latest">gemini-1.5-pro</option>
             <option value="gemini-1.5-pro-002">gemini-1.5-pro-002</option>
             <option value="gemini-1.5-flash-8b-latest">gemini-1.5-flash-8b</option>
-            <option value="gemini-1.5-pro-exp-0827">gemini-1.5-pro-exp-0827</option>
         </select>
     </div>
     <div id="chatContainer"></div>
     <div class="input-container">
+        <button id="cameraButton">📷</button> <!-- Novo botão de câmera -->
         <img id="imagePreview" alt="Image preview" />
         <input type="text" id="messageInput" placeholder="Enter your message, and/or paste an image">
         <button id="sendButton">➤</button>
     </div>
+    <video id="video" style="display:none;" autoplay></video> <!-- Elemento de vídeo para visualização da câmera -->
     <div class="footer" style="text-align: center;">
         <p style="color: white; font-weight: bold;">
             <a href="https://api.whatsapp.com/send?phone=553183032475&text=Ol%C3%A1!%20Quero%20adquirir%20o%20c%C3%B3digo%20fonte%20do%20GVISION!%20" style="font-size: 12px;color: white; text-decoration: none;">
