@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>By MrRafiopy</title>
+    <script type="module">
+        import { GoogleGenerativeAI } from "https://esm.run/@google/generative-ai";
+        import { marked } from "https://esm.run/marked";
+
+        let pastedImage = null;
+
+        function getApiKey() {
+            let apiKey = localStorage.getItem("GEMINI_API_KEY");
+            if (!apiKey) {
+                apiKey = prompt("Please enter your Gemini API key:");
+                if (apiKey) {
+                    localStorage.setItem("GEMINI_API_KEY", apiKey);
+                }
+            }
+            return apiKey;
+        }
+
+        async function getGenerativeModel(params) {
+            const API_KEY = getApiKey();
+            const genAI = new GoogleGenerativeAI(API_KEY);
+            return genAI.getGenerativeModel(params);
+        }
+
+        async function fileToGenerativePart(file) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve({
+                    inlineData: { 
+                        data: reader.result.split(",")[1],
+                        mimeType: file.type 
+                    }
+                });
+                reader.readAsDataURL(file);
+            });
+        }
+
+        function resizeAndCompressImage(file) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    const img = new Image();
+                    img.onload = function() {
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+
+                        let width = img.width;
+                        let height = img.height;
+
+                        if (width > 1000) {
+                            height = Math.round((height * 1000) / width);
+                            width = 1000;
+                        }
+
+                        canvas.width = width;
+                        canvas.height = height;
+
+                        ctx.drawImage(img, 0, 0, width, height);
+
+                        canvas.toBlob((blob) => {
+                            resolve(new File([blob], "compressed_image.jpg", { type: "image/jpeg" }));
+                        }, 'image/jpeg', 0.7);
+                    };
+                    img.src = event.target.result;
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        async function processMessageAndImage() {
+            const messageInput = document.getElementById('messageInput');
+            const chatContainer = document.getElementById('chatContainer');
+            const modelSelect = document.getElementById('modelSelect');
+            
+            if (!messageInput.value && !pastedImage) {
+                alert('Please enter a message or paste an image.');
+                return;
+            }
+
+            const userMessage = document.createElement('div');
+            userMessage.className = 'message user-message';
+
+            // Adiciona o texto primeiro
+            userMessage.textContent = messageInput.value;
+
+            // Cria a imagem somente se existe uma imagem colada
+            if (pastedImage) {
+                const imagePreview = document.createElement('img');
+                imagePreview.src = URL.createObjectURL(pastedImage);
+                imagePreview.className = 'message-image';
+
+                // Adiciona a imagem ao userMessage após o texto
+                userMessage.appendChild(imagePreview);
+            }
+
+            // Adiciona o userMessage ao container do chat
+            chatContainer.appendChild(userMessage);
+            
+            
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+
+            const assistantMessage = document.createElement('div');
+            assistantMessage.className = 'message assistant-message';
+            assistantMessage.textContent = 'Processing...';
+            chatContainer.appendChild(assistantMessage);
+
+            try {
+                const model = await getGenerativeModel({ model: modelSelect.value });
+                let content = [
+                    `Act as a formal and knowledgeable assistant named Daniel, capable of discussing any topic the user requests. You prioritize providing accurate, well-structured, and formal answers on any subject. Additionally, you have tools that allow you to interact with images when the user specifically requests it. These image tools include circling, pointing arrows, cropping, or marking a point on a coordinate within the image. When working with images, return bounding boxes as JSON arrays [ymin, xmin, ymax, xmax] to define the selected areas, and choose from the following element types: circle, arrow, dot, cut.
+
+                    Always provide a clear and formal answer to the user's question, using the following structure:
+                    { "type": "", "bbox": [], "answer": "Your formal response here." }
+                    Even if there is no image involved in the conversation, you can leave the type and bbox empty.
+                    If theres image involved, return bounding boxes as JSON arrays [ymin, xmin, ymax, xmax] for what you need
+                    Key Rules:
+                    You do not need to always work with images. Only use your image modification tools if the user explicitly provides an image.
+                    Do not discuss the technical details of how you process images, including JSON formatting, bounding boxes, or your use of the tools.
+                    Always communicate in a formal and humanized tone, using markdown formatting when appropriate.
+                    Mention that your image manipulation abilities include circling, pointing, and cutting objects, but do not elaborate on how these actions are performed.
+                    Your primary goal is to provide helpful, formal, and accurate responses on any subject while maintaining the ability to handle image-related tasks if requested.
+                    You ALWAYS answer in portuguese, of Brazil!
+                    `,
+                    messageInput.value
+                ];
+
+                if (pastedImage) {
+                    const compressedImage = await resizeAndCompressImage(pastedImage);
+                    const imagePart = await fileToGenerativePart(compressedImage);
+                    content.push(imagePart);
+                }
+                
+                const result = await model.generateContent(content);
+                const response = await result.response;
+                const text = response.text();
+                
+                // Limpeza do texto para extrair JSON válido
+                let cleanText = text.trim();
+
+                // Remover delimitadores de código
+                if (cleanText.startsWith('```json')) {
+                    cleanText = cleanText.slice('```json'.length).trim();
+                }
+                if (cleanText.endsWith('```')) {
+                    cleanText = cleanText.slice(0, -3).trim();
+                }
+
+                let jsonObject;
+                try {
+                    jsonObject = JSON.parse(cleanText);
+                } catch (error) {
+                    console.error("Erro ao fazer o parse do JSON: ", error);
+                }
+
+                console.log("RESPONSE: ", cleanText);
+                console.log("ANSWER: ", jsonObject.answer);
+
+                if (jsonObject && jsonObject.answer) {
+                    assistantMessage.innerHTML = marked.parse(jsonObject.answer);
+                } else {
+                    console.error("Campo 'answer' não encontrado no JSON.");
+                }
+
+                if (pastedImage) {
+                    const elements = extractElements(text);
+                    if (elements.length > 0) {
+                        const processedImageDataUrl = await processImageWithElements(pastedImage, elements);
+                        const processedImage = document.createElement('img');
+                        processedImage.src = processedImageDataUrl;
+                        processedImage.className = 'message-image';
+                        assistantMessage.appendChild(processedImage);
+                    }
+                }
+
+                messageInput.value = '';
+                pastedImage = null;
+                document.getElementById('imagePreview').style.display = 'none';
+            } catch (error) {
+                assistantMessage.textContent = `Error: ${error.message}`;
+            }
+            // Limpa o campo de entrada
+            messageInput.value = '';
+
+            // Opcional: Se você estiver usando um recurso de colagem, limpe a variável pastedImage também
+            pastedImage = null;
+
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function processJSONInText(text) {
+            const jsonRegex = /\{(?:[^{}]|{[^{}]*})*\}/g;
+            return text.replace(jsonRegex, match => {
+                try {
+                    const jsonObj = JSON.parse(match);
+                    if (jsonObj.type && jsonObj.coordinates) {
+                        return `Detected ${jsonObj.type} at coordinates: ${JSON.stringify(jsonObj.coordinates)}`;
+                    }
+                    return match;
+                } catch (e) {
+                    return match;
+                }
+            });
+        }
+
+        function extractElements(text) {
+            const jsonRegex = /\{(?:[^{}]|{[^{}]*})*\}/g;
+            const matches = [...text.matchAll(jsonRegex)];
+            return matches.map(match => {
+                try {
+                    const jsonObj = JSON.parse(match[0]);
+                    if (jsonObj.type && (jsonObj.coordinates || jsonObj.bbox)) {
+                        return {
+                            type: jsonObj.type,
+                            coordinates: jsonObj.coordinates || jsonObj.bbox
+                        };
+                    }
+                } catch (e) {
+                    return null;
+                }
+            }).filter(element => element !== null);
+        }
+
+        async function processImageWithElements(file, elements) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    const image = new Image();
+                    image.onload = function() {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = image.width;
+                        canvas.height = image.height;
+                        const ctx = canvas.getContext('2d');
+                        
+                        ctx.drawImage(image, 0, 0);
+
+                        elements.forEach(element => {
+                            const [ymin, xmin, ymax, xmax] = element.coordinates.map(coord => coord / 1000);
+                            const width = (xmax - xmin) * image.width;
+                            const height = (ymax - ymin) * image.height;
+                            const centerX = (xmin + xmax) / 2 * image.width;
+                            const centerY = (ymin + ymax) / 2 * image.height;
+
+                            ctx.strokeStyle = '#FF0000';
+                            ctx.lineWidth = 3;
+
+                            switch (element.type) {
+                                case 'circle':
+                                    const radius = Math.max(width, height) / 2;
+                                    ctx.beginPath();
+                                    ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+                                    ctx.stroke();
+                                    break;
+                                case 'arrow':
+                                    const arrowSize = 10;
+                                    ctx.beginPath();
+                                    ctx.moveTo(centerX - width / 2 - 10, centerY);
+                                    ctx.lineTo(centerX, centerY);
+                                    ctx.lineTo(centerX - arrowSize, centerY - arrowSize);
+                                    ctx.moveTo(centerX, centerY);
+                                    ctx.lineTo(centerX - arrowSize, centerY + arrowSize);
+                                    ctx.stroke();
+                                    break;
+                                case 'dot':
+                                    ctx.beginPath();
+                                    ctx.arc(centerX, centerY, 5, 0, 2 * Math.PI);
+                                    ctx.fill();
+                                    break;
+                                case 'cut':
+                                    // Cria um novo canvas para a área cortada
+                                    const croppedCanvas = document.createElement('canvas');
+                                    croppedCanvas.width = width;
+                                    croppedCanvas.height = height;
+                                    const croppedCtx = croppedCanvas.getContext('2d');
+
+                                    // Desenha a área cortada no novo canvas
+                                    croppedCtx.drawImage(
+                                        image,
+                                        xmin * image.width, ymin * image.height,  // Início do corte na imagem original
+                                        width, height,  // Tamanho da área cortada
+                                        0, 0,  // Início do novo canvas
+                                        width, height  // Tamanho do novo canvas
+                                    );
+
+                                    // Resolve com a imagem cortada como um data URL
+                                    resolve(croppedCanvas.toDataURL('image/png'));
+                                    break;
+                            }
+                        });
+
+                        resolve(canvas.toDataURL('image/png'));
+                    };
+                    image.src = event.target.result;
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        function handlePaste(e) {
+            const items = e.clipboardData.items;
+            for (let i = 0; i < items.length; i++) {
+                if (items[i].type.indexOf('image') !== -1) {
+                    pastedImage = items[i].getAsFile();
+                    const reader = new FileReader();
+                    reader.onload = function(event) {
+                        document.getElementById('imagePreview').src = event.target.result;
+                        document.getElementById('imagePreview').style.display = 'block';
+                    };
+                    reader.readAsDataURL(pastedImage);
+                    break;
+                }
+            }
+        }
+
+        function handleKeyPress(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                processMessageAndImage();
+            }
+        }
+
+        // Attach event listeners
+        document.getElementById('sendButton').addEventListener('click', processMessageAndImage);
+        document.getElementById('messageInput').addEventListener('paste', handlePaste);
+        document.getElementById('messageInput').addEventListener('keypress', handleKeyPress);
+    </script>
+    <style>
+        .user-message {
+            display: flex;
+            flex-direction: column; /* Para empilhar texto acima da imagem */
+            margin: 10px 0; /* Margem em torno das mensagens */
+        }
+
+        .message-image {
+            max-width: 100%; /* Para garantir que a imagem não exceda a largura do contêiner */
+            height: auto; /* Para manter a proporção da imagem */
+        }
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background-color: #0f2d40;
+        }
+        .header {
+            background-color: #0f2d40;
+            color: white;
+            text-align: center;
+            padding: 10px;
+        }
+        #chatContainer {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+        }
+        .message {
+            max-width: 70%;
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 10px;
+        }
+        .user-message {
+            align-self: flex-end;
+            background-color: #dcf8c6;
+        }
+        .assistant-message {
+            align-self: flex-start;
+            background-color: #ffffff;
+        }
+        .input-container {
+            display: flex;
+            padding: 10px;
+            background-color: #ffffff;
+        }
+        #messageInput {
+            flex-grow: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 20px;
+            margin-right: 10px;
+        }
+        #sendButton {
+            background-color: #25d366;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            cursor: pointer;
+        }
+        #imagePreview {
+            max-width: 100px;
+            max-height: 100px;
+            display: none;
+            margin-right: 10px;
+        }
+        .message-image {
+            max-width: 200px;
+            max-height: 200px;
+            margin-top: 10px;
+        }
+        #modelSelect {
+            margin-bottom: 10px;
+        }
+        .footer {
+            background-color: #333; /* Você pode mudar essa cor para a cor de fundo que preferir */
+            padding: 5px; /* Adiciona um espaço ao redor do conteúdo */
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>GVision - MrRafiopy</h1>
+        <p>Ask it to circle, cut, point an arrow or a dot at an object!</p>
+        <select id="modelSelect">
+            <option value="gemini-1.5-pro-latest">gemini-1.5-pro</option>
+            <option value="gemini-1.5-pro-002">gemini-1.5-pro-002</option>
+            <option value="gemini-1.5-flash-8b-latest">gemini-1.5-flash-8b</option>
+            <option value="gemini-1.5-pro-exp-0827">gemini-1.5-pro-exp-0827</option>
+        </select>
+    </div>
+    <div id="chatContainer"></div>
+    <div class="input-container">
+        <img id="imagePreview" alt="Image preview" />
+        <input type="text" id="messageInput" placeholder="Enter your message, and/or paste an image">
+        <button id="sendButton">➤</button>
+    </div>
+    <div class="footer" style="text-align: center;">
+        <p style="color: white; font-weight: bold;">
+            <a href="https://api.whatsapp.com/send?phone=553183032475&text=Ol%C3%A1!%20Quero%20adquirir%20o%20c%C3%B3digo%20fonte%20do%20GVISION!%20" style="font-size: 12px;color: white; text-decoration: none;">
+                Adquirir código fonte + API customizada por R$9,90
+            </a>
+        </p>
+    </div>
+</body>
+</html>
